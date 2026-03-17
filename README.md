@@ -25,7 +25,7 @@
 │  LEVEL     ▸  Graduate Student  —  May 2027                │
 │  ZONE      ▸  Seattle, WA  ·  open to relocation           │
 │  QUEST     ▸  Summer 2026 internship  /  full-time 2027    │
-│  STATUS    ▸  ▶  OPEN TO WORK                             │
+│  STATUS    ▸  ▶  OPEN TO WORK                              │
 └────────────────────────────────────────────────────────────┘
 ```
 
