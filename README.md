@@ -16,8 +16,6 @@
 ╚═════════════════════════════════════════════════════════════╝
 ```
 
-<img alt="> booting developer profile ... ./shravani --about" src="https://readme-typing-svg.demolab.com?font=Press+Start+2P&size=10&duration=2600&pause=1200&color=b04c7b&vCenter=true&width=600&height=24&lines=%3E+booting+developer+profile...;%3E+.%2Fshravani+--about" />
-
 ```ini
 [SYSTEM]
 user      = Shravani Nikam
@@ -37,7 +35,7 @@ relocate  = true
 ```
 
 <pre>
-<b>shravani@seattle</b>:~$ ls ~/featured-builds
+<b>shravani@github</b>:~$ ls ~/featured-builds
 
 <a href="https://github.com/shravanibnikam/query-plan-lab"><b>query-plan-lab</b></a>
     Eight index strategies against 10M rows: a 10 MB partial index beat a
@@ -51,7 +49,7 @@ relocate  = true
     Predicts how long an open PR will sit before merge, and names which
     part of the review queue is actually the bottleneck.
 
-<b>shravani@seattle</b>:~$ _
+<b>shravani@github</b>:~$ _
 </pre>
 
 ```ini
