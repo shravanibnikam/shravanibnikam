@@ -4,9 +4,11 @@
 # ///
 """Regenerate every SVG in assets/:  uv run build.py
 
-Each asset is written twice (-dark CRT phosphor, -light greenbar printout).
-Fonts (OFL) are subset to the glyphs used and embedded, because GitHub
+Each asset is written twice (-dark, -light) for <picture> theme switching.
+IBM Plex Mono (OFL) is subset to the glyphs used and embedded, because GitHub
 serves README SVGs as images and they can't load external fonts.
+Animations only ever change opacity, and content is visible at t=0, so
+renderers that freeze the first frame still show everything.
 """
 
 import base64
@@ -25,53 +27,36 @@ logging.getLogger("fontTools.subset").setLevel(logging.ERROR)
 ROOT = Path(__file__).parent
 OUT = ROOT / "assets"
 FONTS = ROOT / ".fonts"
-GF = "https://github.com/google/fonts/raw/main/ofl/"
-FONT_SRC = {
-    "VT323-Regular.ttf": GF + "vt323/VT323-Regular.ttf",
-    "IBMPlexMono-Regular.ttf": GF + "ibmplexmono/IBMPlexMono-Regular.ttf",
-    "IBMPlexMono-Bold.ttf": GF + "ibmplexmono/IBMPlexMono-Bold.ttf",
-}
+GF = "https://github.com/google/fonts/raw/main/ofl/ibmplexmono/"
+WEIGHTS = {400: "IBMPlexMono-Regular.ttf", 600: "IBMPlexMono-SemiBold.ttf"}
 
 DARK = NS(
     name="dark",
-    bg="#0a0a0c",
-    panel="#131317",
-    line="#34343d",
-    fg="#ece7da",
-    dim="#8d877b",
-    hi="#a6ff7a",
-    amber="#ffb22e",
-    pink="#ff3d7f",
-    cyan="#36d8ff",
-    ink=(1, 1, 1),
-    band=None,
-    frame="#34343d",
+    panel="#0f1419",
+    line="#262d37",
+    fg="#e6edf3",
+    muted="#8b949e",
+    faint="#2a313b",
+    be="#7ee0a8",
+    ml="#b9a3ff",
+    da="#f2b87a",
 )
 LIGHT = NS(
     name="light",
-    bg="#f3efe4",
-    panel="#faf7ef",
-    line="#c9c2b2",
-    fg="#191816",
-    dim="#6a645a",
-    hi="#1e7b30",
-    amber="#9c5800",
-    pink="#cf0f55",
-    cyan="#0b7fa8",
-    ink=(0.16, 0.14, 0.12),
-    band="#e2ecd8",
-    frame="#24221f",
+    panel="#ffffff",
+    line="#d0d7de",
+    fg="#1f2328",
+    muted="#59636e",
+    faint="#e1e6eb",
+    be="#1a7f4b",
+    ml="#6e40c9",
+    da="#a85a00",
 )
 
-CSS = """.d{font-family:vt,monospace}
-.m{font-family:mono,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-variant-ligatures:none}
+CSS = """.m{font-family:mono,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-variant-ligatures:none}
 .bk{animation:bk 1.1s steps(1) infinite}@keyframes bk{50%{opacity:0}}
-.gl{animation:gl 4.3s infinite}.gl2{animation:gl 4.3s .15s infinite reverse}
-@keyframes gl{0%,90%,100%{transform:none}91%{transform:translate(-5px,2px)}93%{transform:translate(4px,-1px)}95%{transform:translate(-2px,0)}97%{transform:translate(3px,1px)}}
-.roll{animation:roll 7s linear infinite}@keyframes roll{from{transform:translateY(-140px)}to{transform:translateY(620px)}}
-.fl{animation:fl 6s infinite}@keyframes fl{0%,47%,49%,72%,74%,100%{opacity:1}48%{opacity:.85}73%{opacity:.93}}
-.mv{animation:mv 2.4s linear infinite}@keyframes mv{from{transform:translateX(0)}to{transform:translateX(120px)}}
-@media (prefers-reduced-motion:reduce){*{animation:none!important}}"""
+.pu{animation:pu 2.4s ease-in-out infinite}@keyframes pu{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.bk,.pu{animation:none}}"""
 
 
 # ---------- primitives ----------
@@ -81,87 +66,44 @@ def esc(s):
     return html.escape(s, quote=False)
 
 
-def T(x, y, s, size, fill, anchor=None, cls="m", weight=None, attrs=""):
+def T(x, y, s, size, fill, anchor=None, weight=None):
     a = f' text-anchor="{anchor}"' if anchor else ""
     w = f' font-weight="{weight}"' if weight else ""
-    return f'<text x="{x}" y="{y}" class="{cls}" font-size="{size}" fill="{fill}"{a}{w}{attrs}>{esc(s)}</text>'
+    return f'<text x="{x}" y="{y}" class="m" font-size="{size}" fill="{fill}"{a}{w}>{esc(s)}</text>'
 
 
-def S(x, y, size, parts, cls="m", attrs=""):
+def S(x, y, size, parts, anchor=None):
     """One line of mixed-colour text: parts = [(text, colour), ...]."""
+    a = f' text-anchor="{anchor}"' if anchor else ""
     spans = "".join(f'<tspan fill="{c}">{esc(s)}</tspan>' for s, c in parts)
-    return f'<text x="{x}" y="{y}" class="{cls}" font-size="{size}" xml:space="preserve"{attrs}>{spans}</text>'
+    return f'<text x="{x}" y="{y}" class="m" font-size="{size}" xml:space="preserve"{a}>{spans}</text>'
 
 
-def glow(t):
-    return ' filter="url(#glow)"' if t.name == "dark" else ""
+def cw(size):
+    """Advance width of one Plex Mono glyph at `size` px."""
+    return size * 0.6
 
 
-def defs(t):
-    r, g, b = t.ink
-    d = f"""<filter id="grain" x="0" y="0" width="1" height="1"><feTurbulence type="fractalNoise" baseFrequency=".85" numOctaves="2" seed="7" stitchTiles="stitch"/><feColorMatrix values="0 0 0 0 {r} 0 0 0 0 {g} 0 0 0 0 {b} 2.4 0 0 0 -1.3"/><feComposite in2="SourceAlpha" operator="in"/></filter>
-<filter id="stain" x="0" y="0" width="1" height="1"><feTurbulence type="fractalNoise" baseFrequency=".007" numOctaves="3" seed="4"/><feColorMatrix values="0 0 0 0 {r} 0 0 0 0 {g} 0 0 0 0 {b} 2.6 0 0 0 -1.25"/><feComposite in2="SourceAlpha" operator="in"/></filter>
-<filter id="worn" x="-5%" y="-5%" width="110%" height="110%"><feTurbulence type="fractalNoise" baseFrequency=".6" numOctaves="3" seed="11" result="n"/><feColorMatrix in="n" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -4.2 0 0 0 3.3" result="m"/><feComposite in="SourceGraphic" in2="m" operator="in"/></filter>"""
-    if t.name == "dark":
-        d += """<filter id="glow" x="-10%" y="-40%" width="120%" height="180%"><feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-<pattern id="scan" width="6" height="3" patternUnits="userSpaceOnUse"><rect width="6" height="1" fill="#000" opacity=".38"/></pattern>
-<radialGradient id="vig" cx="50%" cy="50%" r="75%"><stop offset="55%" stop-color="#000" stop-opacity="0"/><stop offset="100%" stop-color="#000" stop-opacity=".6"/></radialGradient>
-<linearGradient id="band" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".5" stop-color="#fff" stop-opacity=".045"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>"""
-    else:
-        d += f'<pattern id="bars" width="10" height="64" patternUnits="userSpaceOnUse"><rect width="10" height="32" fill="{t.band}"/></pattern>'
-    return d
-
-
-def under(t, x, y, w, h, rx=0):
-    """Screen background: black glass on dark, greenbar paper on light."""
-    s = f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{rx}" fill="{t.bg}"/>'
-    if t.name == "light":
-        s += f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{rx}" fill="url(#bars)"/>'
-    return s
-
-
-def over(t, x, y, w, h, rx=0):
-    """Grunge on top: grain + stains everywhere, scanlines/vignette/roll bar on dark."""
-    box = f'x="{x}" y="{y}" width="{w}" height="{h}" rx="{rx}"'
-    dark = t.name == "dark"
-    s = f'<rect {box} filter="url(#grain)" opacity="{0.09 if dark else 0.2}"/>'
-    if not dark:  # coffee-stained paper; on glass it just reads as smudge
-        s += f'<rect {box} filter="url(#stain)" opacity=".07"/>'
-    if dark:
-        s += f'<rect {box} fill="url(#scan)"/><rect {box} fill="url(#vig)"/>'
-        s += (
-            f'<clipPath id="cl"><rect {box}/></clipPath><g clip-path="url(#cl)">'
-            f'<rect class="roll" x="{x}" y="{y}" width="{w}" height="120" fill="url(#band)"/></g>'
-        )
-    return s
-
-
-def chrome(t, w, h, title, right=""):
-    """Window frame + title bar shared by every panel."""
-    s = f'<rect x="1.5" y="1.5" width="{w - 3}" height="{h - 3}" rx="14" fill="{t.panel}" stroke="{t.frame}" stroke-width="2.5"/>'
-    for i, c in enumerate((t.pink, t.amber, t.hi)):
-        s += f'<rect x="{22 + i * 22}" y="17" width="12" height="12" fill="{c}"/>'
-    s += T(100, 29, title, 17, t.dim)
+def window(t, w, h, title, right=""):
+    """Rounded panel with three muted dots and a title — the only chrome used."""
+    s = f'<rect x=".75" y=".75" width="{w - 1.5}" height="{h - 1.5}" rx="12" fill="{t.panel}" stroke="{t.line}" stroke-width="1.5"/>'
+    for i in range(3):
+        s += f'<circle cx="{26 + i * 18}" cy="22" r="5" fill="{t.faint}"/>'
+    s += T(92, 27, title, 15, t.muted)
     if right:
-        s += T(w - 24, 29, right, 15, t.dim, anchor="end")
-    s += f'<path d="M2 46H{w - 2}" stroke="{t.frame}" stroke-width="2"/>'
+        s += right
+    s += f'<path d="M1 44H{w - 1}" stroke="{t.line}" stroke-width="1"/>'
     return s
-
-
-def screen(t, w, h, body):
-    """chrome-less helper: background, content, grunge — inside a framed window."""
-    x, y, iw, ih = 3, 47, w - 6, h - 50
-    return under(t, x, y, iw, ih, 0) + body + over(t, x, y, iw, ih, 0)
 
 
 # ---------- fonts ----------
 
 
-def woff2(name, chars):
-    path = FONTS / name
+def woff2(weight, chars):
+    path = FONTS / WEIGHTS[weight]
     if not path.exists():
         FONTS.mkdir(exist_ok=True)
-        urllib.request.urlretrieve(FONT_SRC[name], path)
+        urllib.request.urlretrieve(GF + WEIGHTS[weight], path)
     opts = subset.Options()
     opts.flavor, opts.layout_features, opts.hinting, opts.name_IDs = (
         "woff2",
@@ -178,22 +120,19 @@ def woff2(name, chars):
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def faces(body):
-    chars = "".join(html.unescape(m) for m in re.findall(r">([^<]+)<", body)) + " "
-    f = ""
-    if 'class="d"' in body:
-        f += f"@font-face{{font-family:vt;src:url(data:font/woff2;base64,{woff2('VT323-Regular.ttf', chars)}) format('woff2')}}"
-    f += f"@font-face{{font-family:mono;font-weight:400;src:url(data:font/woff2;base64,{woff2('IBMPlexMono-Regular.ttf', chars)}) format('woff2')}}"
-    if 'font-weight="700"' in body:
-        f += f"@font-face{{font-family:mono;font-weight:700;src:url(data:font/woff2;base64,{woff2('IBMPlexMono-Bold.ttf', chars)}) format('woff2')}}"
-    return f
-
-
 def svg(t, w, h, title, desc, body):
+    chars = "".join(html.unescape(m) for m in re.findall(r">([^<]+)<", body)) + " "
+    weights = [400] + ([600] if 'font-weight="600"' in body else [])
+    faces = "".join(
+        f"@font-face{{font-family:mono;font-weight:{wt};src:url(data:font/woff2;base64,{woff2(wt, chars)}) format('woff2')}}"
+        for wt in weights
+    )
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" '
         f'role="img" aria-labelledby="t d"><title id="t">{esc(title)}</title><desc id="d">{esc(desc)}</desc>'
-        f"<style>{faces(body)}{CSS}</style><defs>{defs(t)}</defs>{body}</svg>"
+        f"<style>{faces}{CSS}</style>"
+        f'<defs><pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse">'
+        f'<circle cx="1.5" cy="1.5" r="1.1" fill="{t.faint}"/></pattern></defs>{body}</svg>'
     )
 
 
@@ -201,268 +140,267 @@ def svg(t, w, h, title, desc, body):
 
 
 def hero(t):
-    W, H = 1200, 470
-    dark = t.name == "dark"
-    b = chrome(t, W, H, "tty1 — shravani@seattle: ~", "80×24 · utf-8")
-    c = ""
-    if not dark:  # tractor-feed holes down both edges of the printout
-        for y in range(70, H - 10, 30):
-            c += f'<circle cx="20" cy="{y}" r="5" fill="#d9d2c2"/><circle cx="{W - 20}" cy="{y}" r="5" fill="#d9d2c2"/>'
-        c += f'<path d="M36 47V{H - 3}M{W - 36} 47V{H - 3}" stroke="{t.line}" stroke-dasharray="2 5"/>'
-
-    x = 56
-    boot = [
-        "Mounted /dev/postgres16.",
-        "Started distributed-systems.service.",
-        "Reached target open-to-work.",
-    ]
-    for i, line in enumerate(boot):
-        c += S(x, 90 + i * 24, 16, [("[  OK  ] ", t.hi), (line, t.dim)])
-
-    name, ny = "SHRAVANI NIKAM", 252
-    split = ' opacity=".75" style="mix-blend-mode:screen"'
-    if dark:  # RGB split that twitches every few seconds
-        layers = T(x - 3, ny, name, 108, t.cyan, cls="d gl", attrs=split)
-        layers += T(x + 3, ny, name, 108, t.pink, cls="d gl2", attrs=split)
-    else:  # print misregistration instead
-        layers = T(x + 3, ny + 2, name, 108, t.pink, cls="d", attrs=' opacity=".55"')
-    c += layers + T(x, ny, name, 108, t.fg, cls="d", attrs=glow(t))
-    c += T(
+    W, H, x = 1200, 452, 52
+    b = window(t, W, H, "shravani@seattle: ~")
+    b += f'<rect x="2" y="45" width="{W - 4}" height="{H - 47}" rx="10" fill="url(#dots)"/>'
+    b += S(x, 98, 18, [("$ ", t.be), ("whoami", t.muted)])
+    b += T(x, 164, "Shravani Nikam", 60, t.fg, weight="600")
+    b += S(
         x,
-        296,
-        "backend · databases · distributed systems",
-        23,
-        t.amber,
-        attrs=glow(t),
+        210,
+        22,
+        [
+            ("backend", t.be),
+            (" · ", t.muted),
+            ("machine learning", t.ml),
+            (" · ", t.muted),
+            ("data science", t.da),
+        ],
     )
-    c += T(x, 330, "MS CS @ Northeastern University · Seattle · Dec 2027", 18, t.dim)
-    c += S(x, 382, 18, [("$ ", t.hi), ("cat motto.txt", t.fg)])
-    c += T(x, 408, "measure it, then believe it.", 18, t.fg)
-    c += S(x, 444, 18, [("shravani@github", t.hi), (":~$ ", t.fg)])
-    c += f'<rect class="bk" x="{x + 19 * 10.8 + 2}" y="429" width="11" height="19" fill="{t.hi}"/>'
-
-    # psql panel
-    px, py, pw, ph = 716, 72, 438, 360
-    c += f'<rect x="{px}" y="{py}" width="{pw}" height="{ph}" rx="6" fill="{t.bg if dark else t.panel}" stroke="{t.frame}" stroke-width="2"/>'
-    c += f'<path d="M{px} {py + 32}H{px + pw}" stroke="{t.frame}" stroke-width="1.5"/>'
-    c += T(px + 16, py + 22, "psql 16 — engineers", 14, t.dim)
-    lx, ly, lh = px + 18, py + 62, 22
-    q = [
-        [("=# ", t.hi), ("EXPLAIN ANALYZE SELECT *", t.fg)],
-        [("-# ", t.hi), ("  FROM engineers WHERE open_to_work;", t.fg)],
-    ]
-    plan = [
-        [("Index Scan using idx_backend on engineers", t.amber)],
-        [("  Index Cond: (stack @> '{python,postgres}')", t.fg)],
-        [("  Filter: open_to_work", t.fg)],
-        [("  Rows Removed by Filter: ", t.fg), ("0", t.hi)],
-        [("Planning Time: ", t.dim), ("0.081 ms", t.fg)],
-        [("Execution Time: ", t.dim), ("0.027 ms", t.hi)],
-    ]
-    for i, p in enumerate(q):
-        c += S(lx, ly + i * lh, 15, p)
-    for i, p in enumerate(plan):
-        c += S(lx, ly + (i + 3) * lh, 15, p)
-    c += T(lx, ly + 10 * lh, "(6 rows)", 15, t.dim)
-
-    # rubber stamp
-    sx, sy = 1012, 392
-    stamp = (
-        f'<rect x="{sx - 132}" y="{sy - 40}" width="264" height="80" rx="4" fill="none" stroke="{t.pink}" stroke-width="4"/>'
-        f'<rect x="{sx - 124}" y="{sy - 32}" width="248" height="64" rx="2" fill="none" stroke="{t.pink}" stroke-width="1.5"/>'
-        + T(sx, sy + 4, "OPEN TO WORK", 44, t.pink, anchor="middle", cls="d")
-        + T(
-            sx,
-            sy + 24,
-            "CO-OP 2027 · FULL-TIME 2028",
-            13,
-            t.pink,
-            anchor="middle",
-            weight="700",
-        )
+    b += T(
+        x,
+        244,
+        "MS CS @ Northeastern University, Seattle · graduating Dec 2027",
+        18,
+        t.muted,
     )
-    c += f'<g transform="rotate(-7 {sx} {sy})"><g filter="url(#worn)">{stamp}</g></g>'
 
-    b += screen(t, W, H, f'<g class="fl">{c}</g>' if dark else c)
+    # availability, top right
+    rx = W - x
+    b += f'<circle class="pu" cx="{rx - cw(17) * 12 - 14}" cy="92" r="5.5" fill="{t.be}"/>'
+    b += T(rx, 98, "open to work", 17, t.fg, anchor="end", weight="600")
+    b += T(rx, 124, "co-op Spring/Summer 2027", 15, t.muted, anchor="end")
+    b += T(rx, 146, "full-time from Jan 2028", 15, t.muted, anchor="end")
+
+    b += f'<path d="M{x} 280H{W - x}" stroke="{t.line}" stroke-dasharray="4 6"/>'
+    rows = [
+        (
+            "backend",
+            t.be,
+            "PostgreSQL · indexing & query plans · offline-first sync · REST APIs",
+        ),
+        (
+            "ml / ai",
+            t.ml,
+            "NLP · BERT pipelines · LLM evaluation · open-source ML infra",
+        ),
+        (
+            "data",
+            t.da,
+            "experiment design · benchmarking · BigQuery pipelines · pandas",
+        ),
+    ]
+    for i, (label, col, text) in enumerate(rows):
+        y = 326 + i * 36
+        b += T(x, y, label, 18, col, weight="600") + T(x + 140, y, text, 18, t.fg)
+    b += S(x, 432, 18, [("$ ", t.be)])
+    b += f'<rect class="bk" x="{x + cw(18) * 2}" y="417" width="10" height="19" fill="{t.be}"/>'
     return svg(
         t,
         W,
         H,
-        "Shravani Nikam: backend engineer — databases, distributed systems",
-        "MS in Computer Science at Northeastern University in Seattle, graduating December 2027. "
+        "Shravani Nikam: backend, machine learning, data science",
+        "MS in Computer Science at Northeastern University, Seattle, graduating December 2027. "
         "Open to a co-op in Spring/Summer 2027 and full-time from January 2028. "
-        "Animated terminal: boot log, an EXPLAIN ANALYZE query plan, and an OPEN TO WORK stamp.",
+        "Backend: PostgreSQL, indexing and query plans, offline-first sync, REST APIs. "
+        "ML/AI: NLP, BERT pipelines, LLM evaluation, open-source ML infrastructure. "
+        "Data: experiment design, benchmarking, BigQuery pipelines, pandas.",
         b,
     )
 
 
 def stats(t):
-    W, H, gap = 1200, 214, 16
+    W, H, gap = 1200, 168, 16
     pw = (W - 3 * gap) / 4
     cells = [
         (
-            "query-plan-lab",
-            "28.4%",
-            t.hi,
-            ["less query time: a 10 MB", "partial index vs a 404 MB", "covering index"],
-        ),
-        (
-            "ibm skillsbuild '24",
+            t.ml,
+            "ml · ibm skillsbuild",
             "−30%",
-            t.amber,
-            ["avg response time after", "rebuilding intent", "classification"],
+            "avg response time, intent",
+            "classification rebuild",
         ),
         (
-            "gdg cloud '22–'25",
-            "200+",
-            t.cyan,
-            [
-                "students taught GCP;",
-                "15 juniors mentored into",
-                "running their own sessions",
-            ],
+            t.ml,
+            "nlp · irjmets paper",
+            "7k+",
+            "reviews scored per aspect",
+            "by a BERT pipeline",
         ),
         (
-            "pg_isready",
-            "OPEN",
-            t.pink,
-            ["co-op Spring/Summer 2027", "full-time from Jan 2028", None],
+            t.be,
+            "backend · query-plan-lab",
+            "28.4%",
+            "less query time: 10 MB",
+            "partial vs 404 MB index",
         ),
+        (t.da, "oss · ml infra", "2 PRs", "DeepSpeed (merged)", "PyTorch (open)"),
     ]
     b = ""
-    for i, (unit, big, col, lines) in enumerate(cells):
+    for i, (col, head, big, l1, l2) in enumerate(cells):
         x = i * (pw + gap)
-        b += f'<rect x="{x + 1.5}" y="1.5" width="{pw - 3}" height="{H - 3}" rx="12" fill="{t.panel}" stroke="{t.frame}" stroke-width="2.5"/>'
-        b += under(t, x + 3, 44, pw - 6, H - 47)
-        b += f'<path d="M{x + 2} 44H{x + pw - 2}" stroke="{t.frame}" stroke-width="2"/>'
-        b += T(x + 18, 29, unit, 16, t.dim) + T(
-            x + pw - 18, 29, f"0{i + 1}", 16, t.dim, anchor="end"
+        b += f'<rect x="{x + 0.75}" y=".75" width="{pw - 1.5}" height="{H - 1.5}" rx="12" fill="{t.panel}" stroke="{t.line}" stroke-width="1.5"/>'
+        b += f'<circle cx="{x + 26}" cy="33" r="4.5" fill="{col}"/>' + T(
+            x + 40, 38, head, 14, t.muted
         )
-        b += T(x + 18, 114, big, 76, col, cls="d", attrs=glow(t))
-        for j, line in enumerate(lines):
-            if line:
-                b += T(x + 18, 146 + j * 22, line, 16, t.fg)
-        if not lines[2]:
-            b += f'<circle class="bk" cx="{x + 25}" cy="{146 + 2 * 22 - 5}" r="5" fill="{t.hi}"/>'
-            b += T(x + 38, 146 + 2 * 22, "accepting connections", 16, t.hi)
-        b += (
-            over(t, x + 3, 44, pw - 6, H - 47)
-            .replace('id="cl"', f'id="cl{i}"')
-            .replace("url(#cl)", f"url(#cl{i})")
-        )
+        b += T(x + 22, 96, big, 46, t.fg, weight="600")
+        b += T(x + 22, 128, l1, 15, t.muted) + T(x + 22, 150, l2, 15, t.muted)
     return svg(
         t,
         W,
         H,
         "Highlights",
+        "30% lower average response time after rebuilding intent classification (AI/ML intern, IBM SkillsBuild). "
+        "7k+ reviews scored per aspect by a BERT pipeline (IRJMETS paper). "
         "28.4% less query time from a 10 MB partial index versus a 404 MB covering index (query-plan-lab). "
-        "30% lower average response time after rebuilding intent classification (AI/ML intern, IBM SkillsBuild, 2024). "
-        "200+ students taught GCP and 15 juniors mentored as GDG Cloud Co-Lead, 2022–2025. "
-        "Open to a co-op in Spring/Summer 2027 and full-time from January 2028.",
+        "Two open-source pull requests to ML infrastructure: DeepSpeed (merged) and PyTorch (open).",
         b,
     )
 
 
-def card(t, slug, status, status_col, desc, tags, viz, alt):
-    W, H = 820, 484
-    b = chrome(t, W, H, f"~/{slug}")
-    tw = len(status) * 9.6 + 24
-    b += f'<rect x="{W - 22 - tw}" y="12" width="{tw}" height="24" fill="none" stroke="{status_col}" stroke-width="2"/>'
-    b += T(W - 22 - tw / 2, 30, status, 16, status_col, anchor="middle", weight="700")
-    c = T(40, 132, slug, 78, t.fg, cls="d", attrs=glow(t))
-    c += T(40, 178, desc[0], 21, t.fg) + T(40, 206, desc[1], 21, t.dim)
-    c += viz
-    c += S(40, 456, 18, [("deps ", t.hi), (" · ".join(tags), t.dim)])
-    b += screen(t, W, H, c)
-    # 8px transparent margin so two cards side by side (and stacked) don't touch
-    return svg(t, W + 16, H + 16, slug, alt, f'<g transform="translate(8 8)">{b}</g>')
+def card(t, slug, track, col, status, desc, stack, viz, alt):
+    W, H, m = 820, 476, 8  # m: transparent margin so side-by-side cards don't touch
+    b = window(t, W, H, f"~/{slug}", T(W - 26, 27, status, 15, t.muted, anchor="end"))
+    tw = len(track) * cw(14) + 24
+    b += f'<rect x="40" y="70" width="{tw}" height="28" rx="6" fill="none" stroke="{col}" stroke-width="1.5"/>'
+    b += T(40 + tw / 2, 89, track, 14, col, anchor="middle", weight="600")
+    b += T(40, 154, slug, 44, t.fg, weight="600")
+    b += T(40, 196, desc[0], 20, t.fg) + T(40, 224, desc[1], 20, t.fg)
+    b += viz
+    b += T(40, 446, " · ".join(stack), 16, t.muted)
+    return svg(
+        t, W + 2 * m, H + 2 * m, slug, alt, f'<g transform="translate({m} {m})">{b}</g>'
+    )
 
 
 def cards(t):
-    # query-plan-lab: q1 bars
-    bx, full = 250, 380
-    qpl = T(40, 254, "q1 median, ms — lower is better", 17, t.dim)
-    for i, (label, ms, col) in enumerate(
-        [("partial · 10 MB", 71.95, t.hi), ("covering · 404 MB", 100.53, t.dim)]
-    ):
-        y = 274 + i * 46
-        w = full * ms / 100.53
-        qpl += T(40, y + 19, label, 19, t.fg)
-        qpl += f'<rect x="{bx}" y="{y}" width="{w:.0f}" height="24" fill="{col}"/>'
-        qpl += T(bx + w + 12, y + 19, f"{ms}", 19, col)
-    qpl += S(
+    # hallucination-hunter: spot the fabrication
+    hh = T(40, 272, "which answer contains a fabrication?", 17, t.muted)
+    pre = "B  The Eiffel Tower opened in "
+    for i, txt in enumerate(["A  The Eiffel Tower opened in 1889.", pre]):
+        y = 288 + i * 48
+        hh += f'<rect x="40" y="{y}" width="740" height="38" rx="6" fill="none" stroke="{t.ml if i else t.line}" stroke-width="1.5"/>'
+        if i:
+            hh += S(56, y + 25, 18, [(txt, t.fg), ("1901", t.ml), (".", t.fg)])
+            hh += T(764, y + 25, "fabricated", 15, t.ml, anchor="end", weight="600")
+        else:
+            hh += S(56, y + 25, 18, [(txt, t.fg)])
+    hh += T(
         40,
-        394,
-        19,
-        [("! ", t.pink), ("GIN on the common JSONB probe: 22.5% slower", t.pink)],
+        404,
+        "measures accuracy · confidence calibration · paired vs single",
+        15,
+        t.muted,
     )
+
+    # mergelag: pipeline, solid = built, dashed = planned
+    ml = ""
+    stages = [
+        ("GH Archive", "public events", True),
+        ("BigQuery", "dry-run priced", True),
+        ("features", "point-in-time", False),
+        ("model", "merge time", False),
+        ("digest", "weekly", False),
+    ]
+    bw, gap = 124, 30
+    for i, (name, cap, built) in enumerate(stages):
+        x = 40 + i * (bw + gap)
+        dash = "" if built else ' stroke-dasharray="5 5"'
+        ml += f'<rect x="{x}" y="270" width="{bw}" height="42" rx="6" fill="none" stroke="{t.da if built else t.line}" stroke-width="1.5"{dash}/>'
+        ml += T(x + bw / 2, 297, name, 16, t.fg if built else t.muted, anchor="middle")
+        ml += T(x + bw / 2, 334, cap, 13, t.muted, anchor="middle")
+        if i:
+            ml += f'<path d="M{x - gap + 6} 291H{x - 6}" stroke="{t.line}" stroke-width="1.5"/>'
+    ml += T(
+        40,
+        380,
+        "guards: no leakage · no unpriced query · no secrets in logs",
+        15,
+        t.muted,
+    )
+
+    # query-plan-lab: q1 bars
+    bx, full = 250, 400
+    qpl = T(40, 272, "q1 median, ms · lower is better", 15, t.muted)
+    for i, (label, ms, c) in enumerate(
+        [("partial · 10 MB", 71.95, t.be), ("covering · 404 MB", 100.53, t.line)]
+    ):
+        y = 292 + i * 38
+        w = full * ms / 100.53
+        qpl += T(40, y + 13, label, 17, t.fg)
+        qpl += f'<rect x="{bx}" y="{y}" width="{w:.0f}" height="16" rx="3" fill="{c}"/>'
+        qpl += T(bx + w + 12, y + 13, f"{ms}", 17, t.fg)
+    qpl += T(40, 384, "GIN on the common JSONB probe: 22.5% slower", 15, t.muted)
 
     # rhea: two offline lanes converging
     rh = ""
-    lanes = [
-        ("phone", 280, [(190, "hlc 41.0", 0.3), (420, "hlc 57.0", 0.9)]),
-        ("laptop", 352, [(300, "hlc 52.1", 0.6), (480, "hlc 57.1", 1.2)]),
-    ]
-    for name, y, dots in lanes:
-        rh += T(40, y + 6, name, 19, t.dim)
-        rh += f'<path d="M140 {y}H560C600 {y} 600 316 640 316" fill="none" stroke="{t.line if t.name == "dark" else t.frame}" stroke-width="3" stroke-dasharray="{"0" if name == "phone" else "10 7"}"/>'
-        for x, lab, d in dots:
-            ly = y - 14 if name == "phone" else y + 28
-            rh += f'<circle cx="{x}" cy="{y}" r="8" fill="{t.amber}"/>'
-            rh += T(x, ly, lab, 15, t.dim, anchor="middle")
-    rh += T(390, 380, "offline", 14, t.dim, anchor="middle")
-    rh += f'<path d="M640 316H780" stroke="{t.hi}" stroke-width="3"/>'
-    rh += f'<g class="mv"><circle cx="640" cy="316" r="4" fill="{t.hi}"/></g>'
-    rh += f'<circle cx="760" cy="316" r="11" fill="{t.hi}"{glow(t)}/>'
-    rh += T(700, 300, "1 row", 16, t.hi, anchor="middle")
-    rh += T(780, 412, "hybrid logical clock + last-write-wins", 16, t.hi, anchor="end")
-
-    # mergelag: invariant guards
-    ml = S(40, 258, 19, [("$ ", t.hi), ("make check", t.fg)])
-    guards = [
-        "no pandas in first-party source",
-        "no credential reaches a log",
-        "no query reads payload (92.4% of bytes)",
-        "no query runs unpriced",
-    ]
-    for i, g in enumerate(guards):
-        ml += S(40, 294 + i * 31, 19, [("[PASS] ", t.hi), (g, t.fg)])
-
-    # hallucination-hunter: spot the fabrication
-    hh = T(40, 256, "which answer contains a fabrication?", 19, t.fg)
-    pre = "B  The Eiffel Tower opened in "
-    for i, (txt, col) in enumerate(
-        [("A  The Eiffel Tower opened in 1889.", t.frame), (pre + "1901.", t.pink)]
-    ):
-        y = 272 + i * 52
-        hh += f'<rect x="40" y="{y}" width="740" height="40" fill="none" stroke="{col}" stroke-width="{2.5 if i else 1.5}"/>'
-        if i:
-            hh += f'<rect x="{56 + len(pre) * 11.4 - 3}" y="{y + 7}" width="{4 * 11.4 + 6}" height="26" fill="{t.pink}" opacity=".28"/>'
-            hh += T(764, y + 26, "← fabricated", 17, t.pink, anchor="end", weight="700")
-        hh += T(56, y + 26, txt, 19, t.fg)
-    hh += S(
-        40,
-        396,
-        17,
-        [
-            ("confidence ", t.dim),
-            ("[1] [2] [3] ", t.dim),
-            ("[4]", t.hi),
-            (" [5]", t.dim),
-        ],
+    for name, y, dots, dash in [
+        ("phone", 284, [(200, "hlc 41.0"), (420, "hlc 57.0")], ""),
+        (
+            "laptop",
+            350,
+            [(300, "hlc 52.1"), (490, "hlc 57.1")],
+            ' stroke-dasharray="7 6"',
+        ),
+    ]:
+        ly = y - 14 if name == "phone" else y + 26
+        rh += T(40, y + 6, name, 17, t.muted)
+        rh += f'<path d="M140 {y}H560C600 {y} 600 317 640 317" fill="none" stroke="{t.line}" stroke-width="2"{dash}/>'
+        for x, lab in dots:
+            rh += f'<circle cx="{x}" cy="{y}" r="6" fill="{t.be}"/>' + T(
+                x, ly, lab, 13, t.muted, anchor="middle"
+            )
+    rh += T(395, 376, "offline", 13, t.muted, anchor="middle")
+    rh += f'<path d="M640 317H760" stroke="{t.be}" stroke-width="2"/><circle cx="760" cy="317" r="8" fill="{t.be}"/>'
+    rh += T(700, 303, "1 row", 14, t.be, anchor="middle")
+    rh += T(
+        780, 404, "hybrid logical clock + last-write-wins", 15, t.muted, anchor="end"
     )
 
     return {
+        "hallucination-hunter": card(
+            t,
+            "hallucination-hunter",
+            "ML · EVALUATION",
+            t.ml,
+            "study in progress",
+            (
+                "Web game + human-evaluation study on whether",
+                "people can spot fabricated facts in AI answers.",
+            ),
+            ["next.js", "typescript", "postgres", "python"],
+            hh,
+            "Hallucination Hunter (study in progress): a web game and human-evaluation study on whether people "
+            "can spot fabricated facts in AI answers; measures accuracy, confidence calibration, and paired versus "
+            "single judgments.",
+        ),
+        "mergelag": card(
+            t,
+            "mergelag",
+            "ML · DATA",
+            t.da,
+            "phase 1a / 8",
+            (
+                "Predicts how long an open pull request waits to",
+                "merge, and what is slowing the review queue.",
+            ),
+            ["python 3.12", "bigquery", "github actions", "uv"],
+            ml,
+            "MergeLag (in development): predicts pull-request merge time. Pipeline from GH Archive through priced "
+            "BigQuery queries (built) to point-in-time features, a merge-time model and a weekly digest (planned), "
+            "with guards against leakage, unpriced queries and secrets in logs.",
+        ),
         "query-plan-lab": card(
             t,
             "query-plan-lab",
-            "SHIPPED",
-            t.hi,
+            "BACKEND · DATABASES",
+            t.be,
+            "shipped",
             (
                 "Eight PostgreSQL 16 index strategies, four query",
                 "plans, 10M rows, reproducible in two commands.",
             ),
-            ["postgres 16", "docker", "python", "make"],
+            ["postgres 16", "docker", "python", "matplotlib"],
             qpl,
             "query-plan-lab: eight PostgreSQL 16 index strategies on 10M rows. A 10 MB partial index ran q1 in "
             "71.95 ms versus 100.53 ms for a 404 MB covering index; GIN made the common JSONB probe 22.5% slower.",
@@ -470,186 +408,158 @@ def cards(t):
         "rhea": card(
             t,
             "rhea",
-            "LIVE",
-            t.hi,
+            "BACKEND · SYNC",
+            t.be,
+            "live",
             (
                 "Local-first cycle tracker with partner sharing.",
-                "Two offline devices still converge on one log.",
+                "Offline edits on two devices converge to one log.",
             ),
             ["react", "typescript", "supabase", "indexeddb"],
             rh,
             "Rhea: local-first cycle tracker with partner sharing. Edits made offline on two devices converge "
             "through a hybrid logical clock and a last-write-wins merge.",
         ),
-        "mergelag": card(
-            t,
-            "mergelag",
-            "WIP 1a/8",
-            t.amber,
-            (
-                "Predicts how long an open PR waits to merge,",
-                "and names what is actually slowing review.",
-            ),
-            ["python 3.12", "bigquery", "github actions", "uv"],
-            ml,
-            "MergeLag (in development): predicts pull-request merge time. Enforced guards: no pandas in "
-            "first-party source, no credential reaches a log, no query reads payload, no query runs unpriced.",
-        ),
-        "hallucination-hunter": card(
-            t,
-            "hallucination-hunter",
-            "STUDY WIP",
-            t.amber,
-            (
-                "Can you catch the AI lying? A web game and a",
-                "human-eval study on spotting fabricated facts.",
-            ),
-            ["next.js 16", "postgres", "supabase", "python"],
-            hh,
-            "Hallucination Hunter: a web game and human-evaluation study on how well people "
-            "detect fabricated facts in AI answers.",
-        ),
     }
 
 
 def log(t):
-    W = 1200
+    W, x = 1200, 52
     rows = [
         (
-            "2022–25",
-            "gdg-cloud",
-            "Cloud Co-Lead · Google Developer Groups on Campus, Pune",
-            "GCP workshops for 200+ students over three years; mentored 15 juniors",
+            "2026",
+            t.da,
+            "Open source · ML infrastructure",
+            "DeepSpeed #8567 merged: sub_group_size docs + default fix · PyTorch #198840 open",
         ),
         (
-            "2024",
-            "ibm-intern",
-            "AI/ML Intern · CSRBOX × IBM SkillsBuild · remote",
-            "rebuilt intent classification around real traffic; avg response −30%",
-        ),
-        (
-            "2025",
-            "irjmets",
-            "Paper · Unified Sentiment Analysis of Customer Reviews",
-            "Vol. 07, Issue 05 · aspect-level BERT pipeline over 7k+ reviews",
+            "→ 2027",
+            t.muted,
+            "MS Computer Science · Northeastern University, Seattle",
+            "distributed systems · DBMS · algorithms · cloud computing",
         ),
         (
             "2025",
-            "sppu",
+            t.ml,
+            "Research paper · IRJMETS Vol. 07, Issue 05",
+            "Unified Sentiment Analysis of Customer Reviews: aspect-level BERT over 7k+ reviews",
+        ),
+        (
+            "2025",
+            t.muted,
             "BS AI & Data Science · Savitribai Phule Pune University",
             None,
         ),
         (
-            "→ 2027",
-            "northeastern",
-            "MS Computer Science · Northeastern University, Seattle",
-            "distributed systems · DBMS · algorithms · cloud computing",
+            "2024",
+            t.ml,
+            "AI/ML Intern · CSRBOX × IBM SkillsBuild",
+            "rebuilt intent classification around real traffic; average response time −30%",
+        ),
+        (
+            "2022–25",
+            t.be,
+            "Cloud Co-Lead · Google Developer Groups on Campus, Pune",
+            "GCP workshops for 200+ students over three years; mentored 15 juniors",
         ),
     ]
-    c = S(40, 92, 18, [("$ ", t.hi), ("journalctl -u shravani --no-pager", t.fg)])
-    y = 138
-    for date, unit, msg, sub in rows:
-        c += T(40, y, date, 18, t.amber)
-        c += T(150, y, unit, 18, t.hi)
-        c += T(300, y, msg, 18, t.fg)
-        c += T(300, y + 26, sub, 16, t.dim) if sub else ""
-        y += 70 if sub else 44
-    c += (
-        T(40, y, "now", 18, t.pink)
-        + T(150, y, "status", 18, t.pink)
-        + T(
-            300,
-            y,
-            "OPEN: co-op Spring/Summer 2027 · full-time from Jan 2028",
-            18,
-            t.pink,
-            weight="700",
-        )
-        + f'<rect class="bk" x="{300 + 56 * 10.8 + 8}" y="{y - 15}" width="11" height="19" fill="{t.pink}"/>'
-    )
-    H = y + 40
-    b = chrome(t, W, H, "journal — shravani.service") + screen(t, W, H, c)
+    b, y = "", 92
+    for when, col, role, sub in rows:
+        b += T(x, y, when, 16, t.muted)
+        b += f'<circle cx="{x + 132}" cy="{y - 6}" r="4.5" fill="{col}"/>'
+        b += T(x + 152, y, role, 18, t.fg, weight="600")
+        if sub:
+            b += T(x + 152, y + 26, sub, 16, t.muted)
+        y += 70 if sub else 48
+    H = y - 14
     return svg(
         t,
         W,
         H,
-        "Experience log",
-        "2022–2025: Cloud Co-Lead, Google Developer Groups on Campus, Pune — GCP workshops for 200+ students, "
-        "mentored 15 juniors. 2024: AI/ML Intern, CSRBOX × IBM SkillsBuild — rebuilt intent classification, "
-        "average response time down 30%. 2025: paper in IRJMETS, Unified Sentiment Analysis of Customer Reviews. "
-        "2025: BS AI & Data Science, Savitribai Phule Pune University. Through 2027: MS Computer Science, "
-        "Northeastern University, Seattle. Open to a co-op in Spring/Summer 2027 and full-time from January 2028.",
-        b,
+        "Experience",
+        "2026: open-source contributions to ML infrastructure — DeepSpeed pull request 8567 merged "
+        "(sub_group_size documentation and default fix), PyTorch pull request 198840 open. "
+        "Through December 2027: MS Computer Science, Northeastern University, Seattle. "
+        "2025: research paper in IRJMETS Vol. 07 Issue 05, Unified Sentiment Analysis of Customer Reviews, "
+        "aspect-level BERT over 7k+ reviews. 2025: BS AI and Data Science, Savitribai Phule Pune University. "
+        "2024: AI/ML Intern, CSRBOX × IBM SkillsBuild; rebuilt intent classification, average response time "
+        "down 30%. 2022–2025: Cloud Co-Lead, Google Developer Groups on Campus, Pune; GCP workshops for 200+ "
+        "students, mentored 15 juniors.",
+        window(t, W, H, "experience") + b,
     )
 
 
 def stack(t):
-    W = 1200
+    W, x = 1200, 52
     rows = [
-        ("core", ["Python", "PostgreSQL", "SQL", "Docker"]),
-        ("backend", ["schema design", "migrations", "query optimization", "REST"]),
-        ("build", ["TypeScript", "React", "Node/Express", "GitHub Actions"]),
-        ("cloud", ["AWS", "GCP", "Linux", "Supabase"]),
-        ("data", ["Pandas", "NumPy", "spaCy", "Hugging Face"]),
+        (
+            "backend",
+            t.be,
+            [
+                "Python",
+                "PostgreSQL",
+                "SQL",
+                "Docker",
+                "Node/Express",
+                "REST",
+                "Supabase",
+            ],
+        ),
+        ("ml / ai", t.ml, ["PyTorch", "DeepSpeed", "Hugging Face", "BERT", "spaCy"]),
+        ("data", t.da, ["Pandas", "NumPy", "BigQuery", "matplotlib"]),
+        (
+            "cloud",
+            t.muted,
+            ["AWS", "GCP", "Linux", "GitHub Actions", "TypeScript", "React"],
+        ),
     ]
-    c = S(40, 92, 18, [("$ ", t.hi), ("tree ~/loadout", t.fg)])
-    y = 140
-    for i, (cat, items) in enumerate(rows):
-        row = T(40, y, "└──" if i == len(rows) - 1 else "├──", 18, t.dim) + T(
-            92, y, cat, 18, t.amber
-        )
-        x = 210
+    b, y = "", 96
+    for label, col, items in rows:
+        b += T(x, y, label, 18, col, weight="600")
+        cx = x + 140
         for item in items:
-            w = len(item) * 10.2 + 28
-            col = t.hi if cat == "core" else t.frame
-            row += f'<rect x="{x}" y="{y - 23}" width="{w:.0f}" height="34" fill="{t.panel}" stroke="{col}" stroke-width="{2 if cat == "core" else 1.5}"/>'
-            row += T(x + 14, y, item, 17, t.hi if cat == "core" else t.fg)
-            x += w + 12
-        c += row
-        y += 54
-    c += T(
-        40,
-        y + 4,
-        f"{len(rows)} directories, {sum(len(r[1]) for r in rows)} files",
-        16,
-        t.dim,
-    )
-    H = y + 36
-    b = chrome(t, W, H, "loadout") + screen(t, W, H, c)
+            w = len(item) * cw(16) + 24
+            b += f'<rect x="{cx}" y="{y - 22}" width="{w:.0f}" height="32" rx="6" fill="none" stroke="{t.line}" stroke-width="1.5"/>'
+            b += T(cx + 12, y, item, 16, t.fg)
+            cx += w + 10
+        y += 52
+    H = y - 18
     return svg(
         t,
         W,
         H,
         "Tech stack",
-        "; ".join(f"{cat}: {', '.join(items)}" for cat, items in rows),
-        b,
+        "; ".join(f"{label}: {', '.join(items)}" for label, _, items in rows),
+        window(t, W, H, "stack") + b,
     )
 
 
 def button(t, label):
-    w, h, sh = len(label) * 12 + 2 * 10.8 + 48, 52, 5
-    b = f'<rect x="{sh}" y="{sh}" width="{w}" height="{h}" fill="{t.pink}"/>'
-    b += f'<rect x="1.5" y="1.5" width="{w - 3}" height="{h - 3}" fill="{t.panel}" stroke="{t.hi if t.name == "dark" else t.frame}" stroke-width="2.5"/>'
-    b += S(22, 34, 20, [("> ", t.hi), (label, t.fg)], attrs=' font-weight="700"')
-    b += f'<rect class="bk" x="{22 + (len(label) + 2) * 12 + 4}" y="36" width="12" height="3" fill="{t.hi}"/>'
-    return svg(t, w + sh, h + sh, label, f"{label} button", b)
+    w, h = len(label) * cw(18) + 64, 48
+    b = f'<rect x=".75" y=".75" width="{w - 1.5}" height="{h - 1.5}" rx="10" fill="{t.panel}" stroke="{t.line}" stroke-width="1.5"/>'
+    b += S(22, 30, 18, [(label, t.fg), ("  ↗", t.muted)])
+    return svg(t, w, h, label, f"{label} button", b)
 
 
 def main():
     OUT.mkdir(exist_ok=True)
+    for f in OUT.glob("*.svg"):  # drop assets from older layouts
+        f.unlink()
     for t in (DARK, LIGHT):
         files = {
             "hero": hero(t),
             "stats": stats(t),
             "log": log(t),
             "stack": stack(t),
-            "btn-linkedin": button(t, "linkedin"),
-            "btn-email": button(t, "email"),
+            "btn-linkedin": button(t, "LinkedIn"),
+            "btn-email": button(t, "Email"),
         }
         files |= {f"card-{k}": v for k, v in cards(t).items()}
         for name, s in files.items():
             (OUT / f"{name}-{t.name}.svg").write_text(s)
-            print(f"{name}-{t.name}.svg  {len(s) // 1024} KB")
+    print(
+        f"{len(list(OUT.glob('*.svg')))} files, {sum(f.stat().st_size for f in OUT.glob('*.svg')) // 1024} KB"
+    )
 
 
 if __name__ == "__main__":
